@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# User-generated content (built up per-user — not committed)
+daily/
+knowledge/concepts/*.md
+knowledge/projects/
+knowledge/qa/
+knowledge/index.md
+knowledge/log.md
+reports/
+
+# Runtime state
+scripts/state.json
+scripts/last-flush.json
+scripts/flush.log
+scripts/session-end.log
+scripts/compile.log
+scripts/session-flush-*
+scripts/flush-context-*
+
+# uv
+uv.lock
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Obsidian
+.obsidian/
