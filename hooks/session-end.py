@@ -1,8 +1,9 @@
 """
-SessionEnd hook - appends raw conversation turns to today's daily log.
+SessionEnd hook - appends raw conversation turns to today's daily log,
+then spawns a background Claude process to compile the log into KB updates.
 
-No API calls. Extracts the last N turns from the transcript JSONL and
-appends them to daily/YYYY-MM-DD.md for Claude to process next session.
+No API calls in this process. A headless `claude -p` subprocess handles
+the compilation asynchronously so the hook returns within the timeout.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,25 +85,13 @@ def extract_turns(transcript_path: Path) -> tuple[str, int]:
     return text, len(recent)
 
 
-def append_to_daily_log(session_id: str, cwd: str, turns_text: str) -> None:
-    """Append session turns to today's daily log."""
-    today = datetime.now(timezone.utc).astimezone()
-    log_path = DAILY_DIR / f"{today.strftime('%Y-%m-%d')}.md"
-
+def ensure_daily_log(today_str: str) -> Path:
+    """Ensure today's daily log file exists, return its path."""
     DAILY_DIR.mkdir(parents=True, exist_ok=True)
-
+    log_path = DAILY_DIR / f"{today_str}.md"
     if not log_path.exists():
-        log_path.write_text(
-            f"# Daily Log: {today.strftime('%Y-%m-%d')}\n\n",
-            encoding="utf-8",
-        )
-
-    time_str = today.strftime("%H:%M")
-    project = Path(cwd).name if cwd else "unknown"
-    entry = f"\n## Session {time_str} | {project}\n\n{turns_text}\n"
-
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(entry)
+        log_path.write_text(f"# Daily Log: {today_str}\n\n", encoding="utf-8")
+    return log_path
 
 
 def main() -> None:
@@ -141,8 +131,63 @@ def main() -> None:
         logging.info("SKIP: only %d turns", turn_count)
         return
 
-    append_to_daily_log(session_id, cwd, turns_text)
-    logging.info("Logged %d turns to daily log", turn_count)
+    logging.info("Extracted %d turns, spawning background compilation", turn_count)
+    spawn_kb_compilation(cwd, turns_text)
+
+
+def spawn_kb_compilation(cwd: str, turns_text: str) -> None:
+    """Spawn a background headless Claude session to summarise the session and update the KB."""
+    today = datetime.now(timezone.utc).astimezone()
+    today_str = today.strftime("%Y-%m-%d")
+    time_str = today.strftime("%H:%M")
+    project = Path(cwd).name if cwd else "unknown"
+    knowledge_dir = ROOT / "knowledge"
+    daily_log_path = ensure_daily_log(today_str)
+
+    prompt = (
+        f"Automated session-end task — do not ask questions, just do the work.\n\n"
+        f"Project: `{project}` | Date: {today_str} {time_str}\n"
+        f"Daily log path: {daily_log_path}\n"
+        f"KB root: {knowledge_dir}/\n\n"
+        f"## Raw conversation turns from this session\n\n"
+        f"{turns_text}\n\n"
+        f"## Instructions\n\n"
+        f"### Step 1 — Append a session summary to the daily log\n"
+        f"Append the following block to {daily_log_path}:\n"
+        f"```\n"
+        f"## Session {time_str} | {project}\n\n"
+        f"<3-7 bullet points summarising what was discussed, decided, or built.\n"
+        f" Focus on outcomes and decisions, not a step-by-step replay.\n"
+        f" Each bullet is one concise sentence.>\n"
+        f"```\n\n"
+        f"### Step 2 — Update the KB\n"
+        f"For each insight that is non-obvious and worth remembering in a future session:\n"
+        f"- Update or create the relevant article under {knowledge_dir}/projects/{project}/\n"
+        f"- Follow Obsidian frontmatter format (title, project, tags, created, updated)\n"
+        f"- Update {knowledge_dir}/index.md (add/update the row for any changed article)\n"
+        f"- Append one line to {knowledge_dir}/log.md:\n"
+        f"  `## {today_str}T{time_str} compiled | {project} — N articles updated`\n\n"
+        f"Skip: ephemeral task details, commands run, anything already evident from the code.\n"
+        f"If nothing is worth saving to the KB, skip Step 2 entirely — that is fine.\n"
+        f"Today's date: {today_str}."
+    )
+
+    env = {**os.environ, "CLAUDE_INVOKED_BY": "session-end-hook"}
+
+    try:
+        subprocess.Popen(
+            ["claude", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
+            env=env,
+            cwd=str(ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # detach so hook process can exit
+        )
+        logging.info("Spawned background KB compilation for project=%s", project)
+    except FileNotFoundError:
+        logging.warning("claude CLI not found in PATH — KB compilation skipped")
+    except Exception as e:
+        logging.error("Failed to spawn KB compilation: %s", e)
 
 
 if __name__ == "__main__":
