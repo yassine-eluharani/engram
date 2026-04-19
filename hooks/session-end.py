@@ -174,13 +174,14 @@ def spawn_kb_compilation(cwd: str, turns_text: str) -> None:
 
     env = {**os.environ, "CLAUDE_INVOKED_BY": "session-end-hook"}
 
+    stderr_log = SCRIPTS_DIR / "kb-compile-stderr.log"
     try:
         subprocess.Popen(
-            ["claude", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
+            ["claude", "--dangerously-skip-permissions", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
             env=env,
             cwd=str(ROOT),
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=open(stderr_log, "a"),
             start_new_session=True,  # detach so hook process can exit
         )
         logging.info("Spawned background KB compilation for project=%s", project)
