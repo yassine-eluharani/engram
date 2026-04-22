@@ -20,6 +20,7 @@ scripts/session-end.log
 scripts/compile.log
 scripts/session-flush-*
 scripts/flush-context-*
+scripts/kb-compile-*
 
 # uv
 uv.lock

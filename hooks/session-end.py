@@ -161,26 +161,37 @@ def spawn_kb_compilation(cwd: str, turns_text: str) -> None:
         f" Each bullet is one concise sentence.>\n"
         f"```\n\n"
         f"### Step 2 — Update the KB\n"
+        f"You MUST read the existing KB articles for this project before deciding what to update.\n"
+        f"Read: {knowledge_dir}/projects/{project}/ (list and read relevant files).\n\n"
         f"For each insight that is non-obvious and worth remembering in a future session:\n"
         f"- Update or create the relevant article under {knowledge_dir}/projects/{project}/\n"
         f"- Follow Obsidian frontmatter format (title, project, tags, created, updated)\n"
         f"- Update {knowledge_dir}/index.md (add/update the row for any changed article)\n"
         f"- Append one line to {knowledge_dir}/log.md:\n"
         f"  `## {today_str}T{time_str} compiled | {project} — N articles updated`\n\n"
-        f"Skip: ephemeral task details, commands run, anything already evident from the code.\n"
-        f"If nothing is worth saving to the KB, skip Step 2 entirely — that is fine.\n"
+        f"IMPORTANT: You must actually write the files using your file-writing tools.\n"
+        f"Do NOT just describe what you would do — execute it.\n"
+        f"Skip: ephemeral task details, commands run, anything already identical in existing KB articles.\n"
+        f"Only skip Step 2 if every insight from this session is ALREADY captured verbatim in the existing KB.\n"
+        f"If you skip Step 2, still append one line to {knowledge_dir}/log.md:\n"
+        f"  `## {today_str}T{time_str} compiled | {project} — no changes needed`\n"
         f"Today's date: {today_str}."
     )
 
     env = {**os.environ, "CLAUDE_INVOKED_BY": "session-end-hook"}
 
+    stdout_log = SCRIPTS_DIR / "kb-compile-stdout.log"
     stderr_log = SCRIPTS_DIR / "kb-compile-stderr.log"
+    separator = f"\n\n{'='*60}\n{today_str} {time_str} | {project}\n{'='*60}\n"
     try:
+        with open(stdout_log, "a") as f_out, open(stderr_log, "a") as f_err:
+            f_out.write(separator)
+            f_err.write(separator)
         subprocess.Popen(
-            ["claude", "--dangerously-skip-permissions", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
+            ["claude", "--dangerously-skip-permissions", "--model", "claude-sonnet-4-6", "-p", prompt],
             env=env,
             cwd=str(ROOT),
-            stdout=subprocess.DEVNULL,
+            stdout=open(stdout_log, "a"),
             stderr=open(stderr_log, "a"),
             start_new_session=True,  # detach so hook process can exit
         )
