@@ -3,9 +3,15 @@ SessionStart hook - project-aware knowledge base context injection.
 
 Loading strategy (token-efficient, scales to hundreds of articles):
   1. Global index.md        — always, full (it's just a summary table)
-  2. Project article list   — filenames + first content line only (NOT full content)
-  3. 2-3 most recently modified project articles — full content ("hot context")
+  2. Project article list   — hierarchical: topic directories collapsed to one row,
+                              flat files listed individually
+  3. Hot articles           — if project uses _index.md directories: load 2 most
+                              recently modified _index.md + their most recent leaf;
+                              otherwise: 2 most recently modified flat articles
   4. Last 20 lines of today's daily log
+
+Also initialises session-state.json with session_id, transcript_path, and cwd
+for use by the Stop hook's mid-session compilation trigger.
 
 Claude reads additional articles on demand via the Read tool during the session.
 The index tells Claude what exists; it fetches what it needs.
@@ -19,16 +25,19 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from shared import clear_running_summary, reset_state_for_session
+
 ROOT = Path(__file__).resolve().parent.parent
 KNOWLEDGE_DIR = ROOT / "knowledge"
 PROJECTS_DIR = KNOWLEDGE_DIR / "projects"
-CONCEPTS_DIR = KNOWLEDGE_DIR / "concepts"
 DAILY_DIR = ROOT / "daily"
 INDEX_FILE = KNOWLEDGE_DIR / "index.md"
 
 # Token budget
 MAX_CONTEXT_CHARS = 18_000
-HOT_ARTICLES = 2        # How many recently-modified articles to load in full
+HOT_ARTICLES = 2
 MAX_LOG_LINES = 20
 
 
@@ -37,7 +46,6 @@ def detect_project(cwd: str) -> str:
     if not cwd:
         return "global"
 
-    # Try git remote
     try:
         result = subprocess.run(
             ["git", "-C", cwd, "remote", "get-url", "origin"],
@@ -96,8 +104,102 @@ def list_project_articles(slug: str) -> list[tuple[Path, str]]:
         key=lambda p: p.stat().st_mtime,
         reverse=True
     )
-
     return [(f, get_first_content_line(f)) for f in files]
+
+
+def build_project_listing(slug: str, articles: list[tuple[Path, str]]) -> str:
+    """
+    Build article listing. Topic directories are collapsed to one row showing
+    leaf file names and count. Root-level flat files appear individually.
+    """
+    project_dir = PROJECTS_DIR / slug
+    lines = [f"## Project: `{slug}` — {len(articles)} article(s)\n"]
+    lines.append("| Article | Summary |")
+    lines.append("|---------|---------|")
+
+    seen_dirs: set[str] = set()
+    for path, summary in articles:
+        rel_parts = path.relative_to(project_dir).parts
+        if len(rel_parts) == 1:
+            # Root-level file
+            rel = str(path.relative_to(KNOWLEDGE_DIR)).replace("\\", "/").replace(".md", "")
+            lines.append(f"| [[{rel}]] | {summary} |")
+        else:
+            # Subdirectory file — collapse to one row per directory
+            dir_name = rel_parts[0]
+            if dir_name in seen_dirs:
+                continue
+            seen_dirs.add(dir_name)
+            dir_path = project_dir / dir_name
+            leaves = sorted(
+                dir_path.glob("*.md"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True
+            )
+            leaf_names = [p.stem for p in leaves if p.name != "_index.md"]
+            leaf_summary = ", ".join(leaf_names[:6])
+            if len(leaf_names) > 6:
+                leaf_summary += f", +{len(leaf_names) - 6} more"
+            index_rel = f"projects/{slug}/{dir_name}/_index"
+            lines.append(f"| [[{index_rel}]] | {leaf_summary} ({len(leaf_names)} leaves) |")
+
+    return "\n".join(lines)
+
+
+def get_hot_articles(
+    slug: str,
+    articles: list[tuple[Path, str]],
+    budget: int,
+) -> tuple[list[str], int]:
+    """
+    Return (hot_chunks, remaining_budget).
+
+    If the project uses _index.md topic directories: load the 2 most recently
+    modified _index.md files plus each directory's most recently modified leaf.
+    Otherwise fall back to loading the 2 most recently modified flat articles.
+    """
+    hot_parts: list[str] = []
+
+    index_files = [(p, s) for p, s in articles if p.name == "_index.md"]
+
+    if index_files:
+        for index_path, _ in index_files[:HOT_ARTICLES]:
+            # Load _index.md
+            content = index_path.read_text(encoding="utf-8")
+            rel = str(index_path.relative_to(KNOWLEDGE_DIR)).replace("\\", "/")
+            chunk = f"### {rel}\n\n{content}"
+            if len(chunk) <= budget:
+                hot_parts.append(chunk)
+                budget -= len(chunk)
+
+            # Load most recently modified leaf in the same directory
+            dir_leaves = [
+                p for p, _ in articles
+                if p.parent == index_path.parent and p.name != "_index.md"
+            ]
+            if dir_leaves:
+                leaf = dir_leaves[0]  # already sorted newest-first
+                content = leaf.read_text(encoding="utf-8")
+                rel = str(leaf.relative_to(KNOWLEDGE_DIR)).replace("\\", "/")
+                chunk = f"### {rel}\n\n{content}"
+                if len(chunk) <= budget:
+                    hot_parts.append(chunk)
+                    budget -= len(chunk)
+    else:
+        # Flat project — load N most recently modified articles
+        loaded = 0
+        for path, _ in articles:
+            if loaded >= HOT_ARTICLES:
+                break
+            content = path.read_text(encoding="utf-8")
+            rel = str(path.relative_to(KNOWLEDGE_DIR)).replace("\\", "/")
+            chunk = f"### {rel}\n\n{content}"
+            if len(chunk) <= budget:
+                hot_parts.append(chunk)
+                budget -= len(chunk)
+                loaded += 1
+
+    return hot_parts, budget
 
 
 def get_recent_log() -> str:
@@ -118,7 +220,7 @@ def build_context(cwd: str) -> str:
     budget = MAX_CONTEXT_CHARS
     parts = []
 
-    # ── 1. Header (always) ─────────────────────────────────────────────
+    # ── 1. Header ─────────────────────────────────────────────────────────
     header = (
         f"## Memory System\n"
         f"**Project:** `{slug}` | **Date:** {today.strftime('%A, %B %d, %Y')}\n"
@@ -128,18 +230,22 @@ def build_context(cwd: str) -> str:
     parts.append(header)
     budget -= len(header)
 
-    # ── 2. Global index (always — it's just a table) ───────────────────
+    # ── 2. Global index ────────────────────────────────────────────────────
     if INDEX_FILE.exists():
         index_text = INDEX_FILE.read_text(encoding="utf-8")
         entry = f"## Global Knowledge Index\n\n{index_text}"
     else:
-        entry = "## Global Knowledge Index\n\n| Article | Summary | Project | Updated |\n|---------|---------|---------|---------|"
+        entry = (
+            "## Global Knowledge Index\n\n"
+            "| Article | Summary | Project | Updated |\n"
+            "|---------|---------|---------|---------|"
+        )
 
     if len(entry) <= budget:
         parts.append(entry)
         budget -= len(entry)
 
-    # ── 3. Project article listing + hot articles ──────────────────────
+    # ── 3. Project article listing + hot articles ──────────────────────────
     articles = list_project_articles(slug)
 
     if not articles:
@@ -154,40 +260,19 @@ def build_context(cwd: str) -> str:
             parts.append(note)
             budget -= len(note)
     else:
-        # Article listing (lightweight — title + one-line summary only)
-        listing_lines = [f"## Project: `{slug}` — {len(articles)} article(s)\n"]
-        listing_lines.append("| Article | Summary |")
-        listing_lines.append("|---------|---------|")
-        for path, summary in articles:
-            rel = str(path.relative_to(KNOWLEDGE_DIR)).replace("\\", "/").replace(".md", "")
-            listing_lines.append(f"| [[{rel}]] | {summary} |")
-        listing = "\n".join(listing_lines)
-
+        listing = build_project_listing(slug, articles)
         if len(listing) <= budget:
             parts.append(listing)
             budget -= len(listing)
 
-        # Hot articles: load the N most recently modified in full
-        loaded = 0
-        hot_parts = []
-        for path, _ in articles:
-            if loaded >= HOT_ARTICLES:
-                break
-            content = path.read_text(encoding="utf-8")
-            rel = str(path.relative_to(KNOWLEDGE_DIR)).replace("\\", "/")
-            chunk = f"### {rel}\n\n{content}"
-            if len(chunk) <= budget:
-                hot_parts.append(chunk)
-                budget -= len(chunk)
-                loaded += 1
-
+        hot_parts, budget = get_hot_articles(slug, articles, budget)
         if hot_parts:
             parts.append(
-                f"## Recently Active Articles (full content)\n\n"
+                "## Recently Active Articles (full content)\n\n"
                 + "\n\n---\n\n".join(hot_parts)
             )
 
-    # ── 4. Recent daily log (tail only) ───────────────────────────────
+    # ── 4. Recent daily log (tail only) ───────────────────────────────────
     log_text = get_recent_log()
     log_entry = f"## Recent Daily Log\n\n{log_text}"
     if len(log_entry) <= budget:
@@ -198,16 +283,26 @@ def build_context(cwd: str) -> str:
 
 def main():
     cwd = ""
+    session_id = ""
+    transcript_path = ""
+
     try:
         raw = sys.stdin.read()
         if raw.strip():
             payload = json.loads(raw)
             cwd = payload.get("cwd", "") or payload.get("working_directory", "")
+            session_id = payload.get("session_id", "")
+            transcript_path = payload.get("transcript_path", "")
     except Exception:
         pass
 
     if not cwd:
         cwd = os.getcwd()
+
+    # Initialise session state for the Stop hook's mid-session trigger
+    if session_id or transcript_path:
+        reset_state_for_session(session_id, transcript_path, cwd)
+        clear_running_summary()
 
     context = build_context(cwd)
 

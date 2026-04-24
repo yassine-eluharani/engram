@@ -1,9 +1,12 @@
 """
-SessionEnd hook - appends raw conversation turns to today's daily log,
-then spawns a background Claude process to compile the log into KB updates.
+SessionEnd hook - compiles the remaining uncompiled conversation turns into KB updates.
+
+Uses a rolling watermark (last_compile_turn from session-state) to only process
+turns that haven't been compiled by a mid-session Stop hook trigger. If no
+mid-session compilation occurred, this behaves like the old "last N turns" approach.
 
 No API calls in this process. A headless `claude -p` subprocess handles
-the compilation asynchronously so the hook returns within the timeout.
+compilation asynchronously so the hook returns within the timeout.
 """
 
 from __future__ import annotations
@@ -21,9 +24,18 @@ from pathlib import Path
 if os.environ.get("CLAUDE_INVOKED_BY"):
     sys.exit(0)
 
-ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from shared import (
+    ROOT,
+    SCRIPTS_DIR,
+    SUMMARY_FILE,
+    load_state,
+    read_running_summary,
+)
+
 DAILY_DIR = ROOT / "daily"
-SCRIPTS_DIR = ROOT / "scripts"
+KNOWLEDGE_DIR = ROOT / "knowledge"
 
 logging.basicConfig(
     filename=str(SCRIPTS_DIR / "session-end.log"),
@@ -32,13 +44,17 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-MAX_TURNS = 30
 MAX_CONTEXT_CHARS = 12_000
 MIN_TURNS = 2
 
 
-def extract_turns(transcript_path: Path) -> tuple[str, int]:
-    """Extract last N conversation turns from JSONL transcript."""
+def extract_turns(transcript_path: Path, start_turn: int = 0) -> tuple[str, int]:
+    """
+    Extract conversation turns from start_turn index onwards, capped at MAX_CONTEXT_CHARS.
+
+    start_turn is the watermark from the last mid-session compilation — turns before
+    this index have already been compiled and should not be repeated.
+    """
     turns: list[str] = []
 
     with open(transcript_path, encoding="utf-8") as f:
@@ -73,8 +89,9 @@ def extract_turns(transcript_path: Path) -> tuple[str, int]:
                 label = "User" if role == "user" else "Assistant"
                 turns.append(f"**{label}:** {content.strip()}")
 
-    recent = turns[-MAX_TURNS:]
-    text = "\n\n".join(recent)
+    # Apply watermark — skip turns already compiled by mid-session triggers
+    window = turns[start_turn:]
+    text = "\n\n".join(window)
 
     if len(text) > MAX_CONTEXT_CHARS:
         text = text[-MAX_CONTEXT_CHARS:]
@@ -82,7 +99,7 @@ def extract_turns(transcript_path: Path) -> tuple[str, int]:
         if boundary > 0:
             text = text[boundary + 2:]
 
-    return text, len(recent)
+    return text, len(window)
 
 
 def ensure_daily_log(today_str: str) -> Path:
@@ -121,35 +138,55 @@ def main() -> None:
         logging.info("SKIP: transcript not found")
         return
 
+    # Read watermark from session state — skip turns already compiled mid-session
+    state = load_state()
+    start_turn = state.get("last_compile_turn", 0)
+    running_summary = read_running_summary()
+
+    logging.info("Watermark: start_turn=%d", start_turn)
+
     try:
-        turns_text, turn_count = extract_turns(transcript_path)
+        turns_text, turn_count = extract_turns(transcript_path, start_turn=start_turn)
     except Exception as e:
         logging.error("Transcript read failed: %s", e)
         return
 
     if turn_count < MIN_TURNS:
-        logging.info("SKIP: only %d turns", turn_count)
+        logging.info("SKIP: only %d uncompiled turns", turn_count)
         return
 
-    logging.info("Extracted %d turns, spawning background compilation", turn_count)
-    spawn_kb_compilation(cwd, turns_text)
+    logging.info("Extracted %d uncompiled turns, spawning background compilation", turn_count)
+    spawn_kb_compilation(cwd, turns_text, start_turn, running_summary)
 
 
-def spawn_kb_compilation(cwd: str, turns_text: str) -> None:
-    """Spawn a background headless Claude session to summarise the session and update the KB."""
+def spawn_kb_compilation(
+    cwd: str,
+    turns_text: str,
+    start_turn: int,
+    running_summary: str,
+) -> None:
+    """Spawn a background headless Claude session to update the KB from remaining turns."""
     today = datetime.now(timezone.utc).astimezone()
     today_str = today.strftime("%Y-%m-%d")
     time_str = today.strftime("%H:%M")
     project = Path(cwd).name if cwd else "unknown"
-    knowledge_dir = ROOT / "knowledge"
     daily_log_path = ensure_daily_log(today_str)
 
+    prior = (
+        f"\n## Context from previous compilations this session\n\n{running_summary}\n\n"
+        if running_summary else ""
+    )
+
+    window_label = f"turns {start_turn}→end" if start_turn > 0 else "full session"
+
     prompt = (
-        f"Automated session-end task — do not ask questions, just do the work.\n\n"
+        f"Automated session-end KB compilation — do not ask questions, just do the work.\n\n"
         f"Project: `{project}` | Date: {today_str} {time_str}\n"
         f"Daily log path: {daily_log_path}\n"
-        f"KB root: {knowledge_dir}/\n\n"
-        f"## Raw conversation turns from this session\n\n"
+        f"KB root: {KNOWLEDGE_DIR}/\n"
+        f"Summary output path: {SUMMARY_FILE}\n"
+        f"{prior}"
+        f"## Raw conversation turns ({window_label})\n\n"
         f"{turns_text}\n\n"
         f"## Instructions\n\n"
         f"### Step 1 — Append a session summary to the daily log\n"
@@ -161,19 +198,28 @@ def spawn_kb_compilation(cwd: str, turns_text: str) -> None:
         f" Each bullet is one concise sentence.>\n"
         f"```\n\n"
         f"### Step 2 — Update the KB\n"
-        f"You MUST read the existing KB articles for this project before deciding what to update.\n"
-        f"Read: {knowledge_dir}/projects/{project}/ (list and read relevant files).\n\n"
-        f"For each insight that is non-obvious and worth remembering in a future session:\n"
-        f"- Update or create the relevant article under {knowledge_dir}/projects/{project}/\n"
-        f"- Follow Obsidian frontmatter format (title, project, tags, created, updated)\n"
-        f"- Update {knowledge_dir}/index.md (add/update the row for any changed article)\n"
-        f"- Append one line to {knowledge_dir}/log.md:\n"
+        f"Read the existing KB articles for this project FIRST before deciding what to update.\n"
+        f"Read: {KNOWLEDGE_DIR}/projects/{project}/ (list and read relevant files).\n\n"
+        f"For each insight that is non-obvious and worth remembering in a future session:\n\n"
+        f"#### Article structure rules\n"
+        f"- Flat article under ~60 lines, single topic → update in place\n"
+        f"- Flat article >80 lines OR 3+ distinct H2 sections → split into a topic directory:\n"
+        f"  - `<topic>/_index.md`: 2-3 sentence overview + bullet list of leaf files\n"
+        f"  - Leaf files: 20-50 lines each, self-contained, wikilinks to siblings and _index\n"
+        f"  - Remove the old flat file once the directory is created\n"
+        f"- Topic already has a directory → update the right leaf; update `_index.md` if scope changed\n\n"
+        f"#### Index format\n"
+        f"Update {KNOWLEDGE_DIR}/index.md. For topic directories, one collapsed row:\n"
+        f"  `| [[projects/{project}/<topic>/_index]] | leaf1, leaf2, leaf3 | {project} | {today_str} |`\n"
+        f"Flat articles remain as individual rows.\n\n"
+        f"#### Log entry\n"
+        f"Append one line to {KNOWLEDGE_DIR}/log.md:\n"
         f"  `## {today_str}T{time_str} compiled | {project} — N articles updated`\n\n"
-        f"IMPORTANT: You must actually write the files using your file-writing tools.\n"
+        f"IMPORTANT: Actually write the files using your file-writing tools.\n"
         f"Do NOT just describe what you would do — execute it.\n"
-        f"Skip: ephemeral task details, commands run, anything already identical in existing KB articles.\n"
-        f"Only skip Step 2 if every insight from this session is ALREADY captured verbatim in the existing KB.\n"
-        f"If you skip Step 2, still append one line to {knowledge_dir}/log.md:\n"
+        f"Skip: ephemeral task details, commands run, anything already identical in existing KB.\n"
+        f"Only skip Step 2 if every insight is ALREADY captured verbatim in the existing KB.\n"
+        f"If you skip Step 2, still append one line to {KNOWLEDGE_DIR}/log.md:\n"
         f"  `## {today_str}T{time_str} compiled | {project} — no changes needed`\n"
         f"Today's date: {today_str}."
     )
@@ -182,7 +228,7 @@ def spawn_kb_compilation(cwd: str, turns_text: str) -> None:
 
     stdout_log = SCRIPTS_DIR / "kb-compile-stdout.log"
     stderr_log = SCRIPTS_DIR / "kb-compile-stderr.log"
-    separator = f"\n\n{'='*60}\n{today_str} {time_str} | {project}\n{'='*60}\n"
+    separator = f"\n\n{'='*60}\n{today_str} {time_str} | {project} [{window_label}]\n{'='*60}\n"
     try:
         with open(stdout_log, "a") as f_out, open(stderr_log, "a") as f_err:
             f_out.write(separator)
@@ -193,9 +239,11 @@ def spawn_kb_compilation(cwd: str, turns_text: str) -> None:
             cwd=str(ROOT),
             stdout=open(stdout_log, "a"),
             stderr=open(stderr_log, "a"),
-            start_new_session=True,  # detach so hook process can exit
+            start_new_session=True,
         )
-        logging.info("Spawned background KB compilation for project=%s", project)
+        logging.info(
+            "Spawned background KB compilation: project=%s start_turn=%d", project, start_turn
+        )
     except FileNotFoundError:
         logging.warning("claude CLI not found in PATH — KB compilation skipped")
     except Exception as e:

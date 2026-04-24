@@ -323,42 +323,52 @@ llm-personal-kb/
 
 Hooks are configured in `.claude/settings.json` and fire automatically when you use Claude Code in this project.
 
-### `.claude/settings.json` Format
-
-```json
-{
-  "hooks": {
-    "SessionStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "uv run python hooks/session-start.py", "timeout": 15 }] }],
-    "PreCompact": [{ "matcher": "", "hooks": [{ "type": "command", "command": "uv run python hooks/pre-compact.py", "timeout": 10 }] }],
-    "SessionEnd": [{ "matcher": "", "hooks": [{ "type": "command", "command": "uv run python hooks/session-end.py", "timeout": 10 }] }]
-  }
-}
-```
-
-Commands use simple relative paths from the project root. Empty `matcher` catches all events.
-
 ### Hook Details
 
-**`session-start.py`** (SessionStart)
+**`hooks/session-start.py`** (SessionStart)
 - Pure local I/O, no API calls, runs in under 1 second
-- Reads `knowledge/index.md` and the most recent daily log
+- Reads `knowledge/index.md`; builds hierarchical article listing; loads hot articles
+- Also initialises `scripts/session-state.json` with `session_id`, `transcript_path`, `cwd`
+  for use by the Stop hook's mid-session trigger
 - Outputs JSON to stdout: `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "..."}}`
-- Claude sees the knowledge base index at the start of every session
-- Max context: 20,000 characters
+- Max context: 18,000 characters
 
-**`session-end.py`** (SessionEnd)
-- Reads hook input from stdin (JSON with `session_id`, `transcript_path`, `cwd`)
-- Copies the raw JSONL transcript to a temp file (no parsing in the hook - keeps it fast)
-- Spawns `flush.py` as a fully detached background process
+**`hooks/session-end.py`** (SessionEnd)
+- Reads `last_compile_turn` from `scripts/session-state.json` (watermark from any mid-session compilations)
+- Extracts only the turns since the watermark — previously compiled turns are skipped
+- Spawns a background `claude -p` to compile remaining turns and append to the daily log
 - Recursion guard: exits immediately if `CLAUDE_INVOKED_BY` env var is set
 
-**`pre-compact.py`** (PreCompact)
-- Same architecture as session-end.py
-- Fires before Claude Code auto-compacts the context window
-- Guards against empty `transcript_path` (known Claude Code bug #13668)
-- Critical for long sessions: captures context before summarization discards it
+**`hooks/stop.py`** (Stop)
+- Fires at the end of every Claude turn
+- Increments `turns_since_compile` in session state; evaluates two thresholds:
+  - `edits_since_compile >= 8`
+  - `turns_since_compile >= 15` AND `time_since_last_compile >= 10 min`
+- If a threshold is met and no compile lock is held: spawns mid-session compilation for the
+  current window, resets counters, writes watermark
+- Lock TTL: 5 minutes (prevents rapid re-triggering; stale locks are stolen automatically)
 
-**Why both PreCompact and SessionEnd?** Long-running sessions may trigger multiple auto-compactions before you close the session. Without PreCompact, intermediate context is lost to summarization before SessionEnd ever fires.
+**`hooks/post-tool-use.py`** (PostToolUse)
+- Increments `edits_since_compile` when Write, Edit, or NotebookEdit tools complete
+- Under 50ms, no API calls — pure state counter
+
+**`hooks/shared.py`**
+- Session-state read/write helpers (`load_state`, `save_state`, `reset_state_for_session`)
+- Lockfile management (`acquire_lock`, `release_lock`, `is_locked`)
+- Running-summary helpers (`read_running_summary`, `clear_running_summary`)
+
+### Rolling Window Architecture
+
+```
+Session: [turn 1 ─── turn 8] [turn 9 ─── turn 23] [turn 24 ─── turn N]
+              ↓ edits≥8            ↓ turns≥15+10min        ↓ session-end
+         mid-session #1        mid-session #2          final sweep
+         watermark=8           watermark=23            start_turn=23
+```
+
+Each compilation window covers only new turns. A `running_summary` (2-3 sentences, written
+to `scripts/last-compile-summary.txt`) chains windows so the next compiler knows what was
+already captured.
 
 ### Background Flush Process (`flush.py`)
 

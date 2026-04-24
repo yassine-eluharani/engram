@@ -7,21 +7,29 @@ At session start, you receive injected context showing the current project and i
 
 ```
 ~/.claude/memory-compiler/knowledge/    ← Obsidian vault root (point Obsidian here)
-├── index.md                            # Global catalog — one row per article
+├── index.md                            # Global catalog — one row per article/directory
 ├── log.md                              # Append-only operation log
 ├── concepts/                           # Global, cross-project knowledge
 │   └── <concept-name>.md              # One file per concept
 ├── projects/
 │   └── <project-slug>/                # One folder per project
-│       ├── overview.md                 # Always create this first
-│       ├── <topic>.md                  # One file per topic/pattern/decision
-│       └── <subtopic>.md
+│       ├── overview.md                 # Always create this first (flat)
+│       ├── <small-topic>.md            # Flat file: under ~60 lines, single topic
+│       └── <large-topic>/             # Topic directory: >80 lines OR 3+ H2 sections
+│           ├── _index.md              #   2-3 sentence overview + list of leaves
+│           ├── <subtopic-a>.md        #   20-50 lines, self-contained leaf
+│           └── <subtopic-b>.md        #   20-50 lines, self-contained leaf
 └── qa/
     └── <question-slug>.md             # One file per filed Q&A
 ```
 
-**One file per thing.** Never put multiple unrelated topics in one file.
-Wikilinks use Obsidian format: `[[projects/my-app/auth-patterns]]` (no .md extension).
+**Granularity rules:**
+- **Keep flat** when an article is under ~60 lines and covers one topic
+- **Split into a directory** when an article grows past ~80 lines OR has 3+ distinct H2 sections
+- After splitting: create `<topic>/_index.md` (overview + leaf list) + individual leaf files; delete the old flat file
+- **Leaf files** (20-50 lines): self-contained, wikilink to siblings and to `_index`
+
+Wikilinks use Obsidian format: `[[projects/my-app/auth/_index]]` (no .md extension).
 
 ## When to update the KB
 
@@ -37,9 +45,10 @@ Update when asked:
 ## How to update
 
 1. **One article = one file** — never merge unrelated topics into one file
-2. **Create/update the article** at the correct path
+2. **Create/update the article** at the correct path (see granularity rules above)
 3. **Update `knowledge/index.md`** — add or update the row:
-   `| [[projects/<slug>/<name>]] | one-line summary | <slug> | YYYY-MM-DD |`
+   - Flat article: `| [[projects/<slug>/<name>]] | one-line summary | <slug> | YYYY-MM-DD |`
+   - Topic directory: `| [[projects/<slug>/<topic>/_index]] | leaf1, leaf2, leaf3 | <slug> | YYYY-MM-DD |`
 4. **Append to `knowledge/log.md`**:
    `## [ISO timestamp] updated | projects/<slug>/<name>.md — reason`
 5. **Link between articles** — use `[[wikilinks]]` to connect related files
@@ -78,8 +87,8 @@ Deeper explanation. Multiple paragraphs fine.
 
 At session start, you receive:
 - The full global index (all articles listed with one-line summaries)
-- A listing of all project articles (titles only, not full content)
-- The 2 most recently modified project articles in full
+- A hierarchical project article listing: topic directories collapsed to one row showing leaf names and count; flat files listed individually
+- Hot articles in full: if the project uses `_index.md` directories, the 2 most recently modified `_index.md` files plus each directory's most recent leaf; otherwise the 2 most recently modified flat articles
 
 **Before responding to any substantive request**, scan the project article listing
 and proactively read any articles that are likely relevant — don't wait to be asked.

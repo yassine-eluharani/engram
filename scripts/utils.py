@@ -87,11 +87,24 @@ def read_all_wiki_content() -> str:
 
 
 def list_wiki_articles() -> list[Path]:
-    """List all wiki article files."""
+    """
+    List all wiki article files, including nested project topic directories.
+
+    Scans:
+    - knowledge/concepts/         (flat)
+    - knowledge/connections/      (flat)
+    - knowledge/qa/               (flat)
+    - knowledge/projects/**/*.md  (recursive — supports topic sub-directories)
+    """
     articles = []
     for subdir in [CONCEPTS_DIR, CONNECTIONS_DIR, QA_DIR]:
         if subdir.exists():
             articles.extend(sorted(subdir.glob("*.md")))
+
+    projects_dir = KNOWLEDGE_DIR / "projects"
+    if projects_dir.exists():
+        articles.extend(sorted(projects_dir.rglob("*.md")))
+
     return articles
 
 
