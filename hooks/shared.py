@@ -20,7 +20,10 @@ LOCK_FILE = SCRIPTS_DIR / "compile.lock"
 SUMMARY_FILE = SCRIPTS_DIR / "last-compile-summary.txt"
 
 # How old a lockfile must be (seconds) before we consider the process dead
-LOCK_STALE_SECONDS = 300  # 5 minutes
+LOCK_STALE_SECONDS = 180  # 3 minutes
+
+# Single, append-only feed of automatic-update activity. Easy to tail.
+AUTO_LOG_FILE = ROOT / "auto-updates.log"
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -163,3 +166,17 @@ def minutes_since(iso_str: str) -> float:
         return (now - then).total_seconds() / 60
     except Exception:
         return float("inf")
+
+
+# ── Auto-update log ───────────────────────────────────────────────────────────
+
+def log_auto_update(event: str, details: str = "") -> None:
+    """Append one timestamped line to auto-updates.log. Best-effort, never raises."""
+    try:
+        ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"{ts} | {event:<20} | {details}\n" if details else f"{ts} | {event}\n"
+        AUTO_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(AUTO_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass

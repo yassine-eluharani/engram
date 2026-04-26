@@ -27,10 +27,12 @@ if os.environ.get("CLAUDE_INVOKED_BY"):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from shared import (
+    AUTO_LOG_FILE,
     ROOT,
     SCRIPTS_DIR,
     SUMMARY_FILE,
     load_state,
+    log_auto_update,
     read_running_summary,
 )
 
@@ -126,16 +128,19 @@ def main() -> None:
     session_id = hook_input.get("session_id", "unknown")
     cwd = hook_input.get("cwd", "") or hook_input.get("working_directory", "")
     transcript_path_str = hook_input.get("transcript_path", "")
+    project = Path(cwd).name if cwd else "?"
 
-    logging.info("SessionEnd: session=%s project=%s", session_id, Path(cwd).name if cwd else "?")
+    logging.info("SessionEnd: session=%s project=%s", session_id, project)
 
     if not transcript_path_str:
         logging.info("SKIP: no transcript path")
+        log_auto_update("SESSION-END-SKIPPED", f"project={project} reason=no-transcript-path")
         return
 
     transcript_path = Path(transcript_path_str)
     if not transcript_path.exists():
         logging.info("SKIP: transcript not found")
+        log_auto_update("SESSION-END-SKIPPED", f"project={project} reason=transcript-not-found")
         return
 
     # Read watermark from session state — skip turns already compiled mid-session
@@ -149,13 +154,22 @@ def main() -> None:
         turns_text, turn_count = extract_turns(transcript_path, start_turn=start_turn)
     except Exception as e:
         logging.error("Transcript read failed: %s", e)
+        log_auto_update("SESSION-END-SKIPPED", f"project={project} reason=transcript-read-error")
         return
 
     if turn_count < MIN_TURNS:
         logging.info("SKIP: only %d uncompiled turns", turn_count)
+        log_auto_update(
+            "SESSION-END-SKIPPED",
+            f"project={project} reason=only-{turn_count}-uncompiled-turns",
+        )
         return
 
     logging.info("Extracted %d uncompiled turns, spawning background compilation", turn_count)
+    log_auto_update(
+        "SESSION-END-TRIGGERED",
+        f"project={project} turns={turn_count} start_turn={start_turn}",
+    )
     spawn_kb_compilation(cwd, turns_text, start_turn, running_summary)
 
 
@@ -215,12 +229,17 @@ def spawn_kb_compilation(
         f"#### Log entry\n"
         f"Append one line to {KNOWLEDGE_DIR}/log.md:\n"
         f"  `## {today_str}T{time_str} compiled | {project} — N articles updated`\n\n"
+        f"### Step 3 — Mark the auto-update as completed\n"
+        f"Append ONE line to {AUTO_LOG_FILE} using the current local time in `YYYY-MM-DD HH:MM:SS` format:\n"
+        f"  `<timestamp> | SESSION-END-COMPLETED | project={project} | N articles updated | <one-line summary>`\n"
+        f"If no articles changed, write `0 articles updated | already current`.\n\n"
         f"IMPORTANT: Actually write the files using your file-writing tools.\n"
         f"Do NOT just describe what you would do — execute it.\n"
         f"Skip: ephemeral task details, commands run, anything already identical in existing KB.\n"
         f"Only skip Step 2 if every insight is ALREADY captured verbatim in the existing KB.\n"
         f"If you skip Step 2, still append one line to {KNOWLEDGE_DIR}/log.md:\n"
         f"  `## {today_str}T{time_str} compiled | {project} — no changes needed`\n"
+        f"Step 3 (auto-updates.log) ALWAYS runs, even if Step 2 is skipped.\n"
         f"Today's date: {today_str}."
     )
 

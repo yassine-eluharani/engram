@@ -1,10 +1,10 @@
 {
-  "session_id": "e7b42112-40f6-4821-bb54-3bbd5858140f",
-  "transcript_path": "/Users/yassine/.claude/projects/-Users-yassine-Developer-Agentic-engram/e7b42112-40f6-4821-bb54-3bbd5858140f.jsonl",
-  "cwd": "/Users/yassine/Developer/Agentic/engram",
-  "last_compile_turn": 0,
-  "last_compile_time": "2026-04-24T14:39:12.873335+01:00",
-  "edits_since_compile": 8,
+  "session_id": "2d35c5ac-96da-47fb-b676-8582446e19df",
+  "transcript_path": "/Users/yassine/.claude/projects/-Users-yassine-Developer-Python-applypilot/2d35c5ac-96da-47fb-b676-8582446e19df.jsonl",
+  "cwd": "/Users/yassine/Developer/Python/applypilot",
+  "last_compile_turn": 7,
+  "last_compile_time": "2026-04-26T18:26:31.471808+01:00",
+  "edits_since_compile": 3,
   "turns_since_compile": 0,
   "running_summary": ""
 }

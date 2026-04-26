@@ -26,10 +26,12 @@ if os.environ.get("CLAUDE_INVOKED_BY"):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from shared import (
+    AUTO_LOG_FILE,
     ROOT,
     SCRIPTS_DIR,
     acquire_lock,
     load_state,
+    log_auto_update,
     minutes_since,
     read_running_summary,
     release_lock,
@@ -40,9 +42,9 @@ from shared import (
 KNOWLEDGE_DIR = ROOT / "knowledge"
 SUMMARY_FILE = SCRIPTS_DIR / "last-compile-summary.txt"
 
-EDITS_THRESHOLD = 8
-TURNS_THRESHOLD = 15
-TIME_THRESHOLD_MINUTES = 10
+EDITS_THRESHOLD = 4
+TURNS_THRESHOLD = 8
+TIME_THRESHOLD_MINUTES = 5
 MAX_CONTEXT_CHARS = 12_000
 
 logging.basicConfig(
@@ -148,7 +150,10 @@ def spawn_compilation(state: dict, current_turn: int) -> bool:
         f"### After completing KB updates\n"
         f"1. Write a 2-3 sentence summary to {SUMMARY_FILE} (what was compiled — used by next window)\n"
         f"2. Append one line to {KNOWLEDGE_DIR}/log.md:\n"
-        f"   `## {today_str}T{time_str} mid-session | {project} — N articles updated`\n\n"
+        f"   `## {today_str}T{time_str} mid-session | {project} — N articles updated`\n"
+        f"3. Append ONE line to {AUTO_LOG_FILE} using the current local time in `YYYY-MM-DD HH:MM:SS` format:\n"
+        f"   `<timestamp> | COMPLETED            | project={project} | N articles updated | <one-line summary>`\n"
+        f"   If no articles changed, write `0 articles updated | already current`.\n\n"
         f"IMPORTANT: Actually write the files using your tools. Do NOT just describe what to do.\n"
         f"Skip: ephemeral task details, commands run, anything already identical in existing KB.\n"
         f"Today's date: {today_str}."
@@ -202,12 +207,22 @@ def main() -> None:
     turns = state["turns_since_compile"]
     elapsed = minutes_since(state.get("last_compile_time", ""))
     current_turn = state.get("last_compile_turn", 0) + turns
+    project = Path(state.get("cwd", "")).name or "unknown"
 
     edits_trigger = edits >= EDITS_THRESHOLD
     turns_trigger = turns >= TURNS_THRESHOLD and elapsed >= TIME_THRESHOLD_MINUTES
 
+    elapsed_display = f"{elapsed:.1f}" if elapsed != float("inf") else "inf"
+    log_auto_update(
+        "SNAPSHOT",
+        f"project={project} edits={edits}/{EDITS_THRESHOLD} "
+        f"turns={turns}/{TURNS_THRESHOLD} elapsed={elapsed_display}/{TIME_THRESHOLD_MINUTES}min",
+    )
+
     if not (edits_trigger or turns_trigger):
         return
+
+    reason = "edits-threshold" if edits_trigger else "turns-threshold"
 
     logging.info(
         "Threshold met — edits=%d turns=%d elapsed=%.1fmin edits_trigger=%s turns_trigger=%s",
@@ -216,15 +231,27 @@ def main() -> None:
 
     if not acquire_lock():
         logging.info("Lock held by another process — skipping this trigger")
+        log_auto_update(
+            "SKIPPED-LOCKED",
+            f"project={project} edits={edits} turns={turns} reason={reason} (lock held)",
+        )
         return
 
     spawned = spawn_compilation(state, current_turn)
     if spawned:
+        log_auto_update(
+            "TRIGGERED",
+            f"project={project} edits={edits} turns={turns} reason={reason} spawn=ok",
+        )
         state = load_state()
         state = reset_compile_counters(state, current_turn)
         save_state(state)
-        # Lock intentionally NOT released — expires after 5 min to prevent rapid re-triggering
+        # Lock intentionally NOT released — expires after LOCK_STALE_SECONDS to prevent rapid re-triggering
     else:
+        log_auto_update(
+            "SPAWN-FAILED",
+            f"project={project} edits={edits} turns={turns} reason={reason}",
+        )
         release_lock()  # Release immediately on failure so the next trigger can retry
 
 

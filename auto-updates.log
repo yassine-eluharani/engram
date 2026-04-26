@@ -1,0 +1,47 @@
+2026-04-26 14:09:57 | SMOKE-TEST           | verifying log helper writes correctly
+2026-04-26 14:09:57 | SNAPSHOT             | project=.claude edits=11/4 turns=1/8 elapsed=60.1/5min
+2026-04-26 14:09:57 | TRIGGERED            | project=.claude edits=11 turns=1 reason=edits-threshold spawn=ok
+2026-04-26 14:09:58 | SESSION-START        | project=engram session=c3be715b
+2026-04-26 14:11:12 | SNAPSHOT             | project=.claude edits=0/4 turns=1/8 elapsed=1.2/5min
+2026-04-26 14:09:00 | COMPLETED            | project=.claude | 2 articles updated | lowered thresholds (4 edits/8 turns/5 min), added auto-updates.log event feed + stale-lock cleanup
+2026-04-26 14:16:52 | SESSION-END-TRIGGERED | project=.claude turns=23 start_turn=0
+2026-04-26 14:17:03 | SESSION-END-TRIGGERED | project=applypilot turns=98 start_turn=0
+2026-04-26 14:17:08 | STALE-LOCK-CLEARED   | age=431s pid=87919
+2026-04-26 14:17:08 | SESSION-START        | project=applypilot session=ee72d890
+2026-04-26 14:16:00 | SESSION-END-COMPLETED | project=.claude | 0 articles updated | already current — mid-session compilation at 14:09 captured all changes
+2026-04-26 14:17:00 | SESSION-END-COMPLETED | project=applypilot | 0 articles updated | already current — mid-session 12:39 captured dict(zip) fix, execute_pipeline, init_db guard, user cache, BACKEND_URL docker wiring
+2026-04-26 14:35:44 | SNAPSHOT             | project=applypilot edits=9/4 turns=1/8 elapsed=18.6/5min
+2026-04-26 14:35:44 | TRIGGERED            | project=applypilot edits=9 turns=1 reason=edits-threshold spawn=ok
+2026-04-26 14:35:00 | COMPLETED            | project=applypilot | 2 articles updated | score distribution chart moved to pipeline page; jobs page retains only 4 stat boxes
+2026-04-26 15:15:56 | SNAPSHOT             | project=applypilot edits=8/4 turns=1/8 elapsed=40.2/5min
+2026-04-26 15:15:56 | TRIGGERED            | project=applypilot edits=8 turns=1 reason=edits-threshold spawn=ok
+2026-04-26 15:15:00 | COMPLETED            | project=applypilot | 5 articles updated | split pipeline.md into 4-leaf directory; new scoring-optimization.md (two-phase LLM plan); discovery worker updated
+2026-04-26 15:30:15 | SNAPSHOT             | project=applypilot edits=8/4 turns=1/8 elapsed=14.3/5min
+2026-04-26 15:30:15 | TRIGGERED            | project=applypilot edits=8 turns=1 reason=edits-threshold spawn=ok
+2026-04-26 15:31:05 | COMPLETED            | project=applypilot | 2 articles updated | two-phase scoring marked DONE (pipeline.py swapped to run_two_phase_scoring); score-stage orchestrator call updated
+2026-04-26 15:31:26 | SNAPSHOT             | project=applypilot edits=6/4 turns=1/8 elapsed=1.2/5min
+2026-04-26 15:31:26 | SKIPPED-LOCKED       | project=applypilot edits=6 turns=1 reason=edits-threshold (lock held)
+2026-04-26 15:33:04 | SNAPSHOT             | project=applypilot edits=6/4 turns=2/8 elapsed=2.8/5min
+2026-04-26 15:33:04 | SKIPPED-LOCKED       | project=applypilot edits=6 turns=2 reason=edits-threshold (lock held)
+2026-04-26 15:34:07 | SNAPSHOT             | project=applypilot edits=6/4 turns=3/8 elapsed=3.9/5min
+2026-04-26 15:34:07 | TRIGGERED            | project=applypilot edits=6 turns=3 reason=edits-threshold spawn=ok
+2026-04-26 15:34:00 | COMPLETED            | project=applypilot | 3 articles updated | Stripe gaps+fix plan in auth-stripe, pending schema columns, UK partnership in decisions
+2026-04-26 15:49:00 | STALE-LOCK-CLEARED   | age=892s pid=9619
+2026-04-26 15:49:00 | SESSION-START        | project=applypilot session=2d35c5ac
+2026-04-26 15:54:58 | SNAPSHOT             | project=applypilot edits=0/4 turns=1/8 elapsed=6.0/5min
+2026-04-26 16:24:47 | SNAPSHOT             | project=applypilot edits=1/4 turns=2/8 elapsed=35.8/5min
+2026-04-26 16:38:19 | SNAPSHOT             | project=applypilot edits=8/4 turns=3/8 elapsed=49.3/5min
+2026-04-26 16:38:19 | TRIGGERED            | project=applypilot edits=8 turns=3 reason=edits-threshold spawn=ok
+2026-04-26 16:38:00 | COMPLETED            | project=applypilot | 2 articles updated | Stripe webhook 500 fix + post-upgrade celebration UI documented
+2026-04-26 17:30:16 | SNAPSHOT             | project=applypilot edits=17/4 turns=1/8 elapsed=51.9/5min
+2026-04-26 17:30:16 | TRIGGERED            | project=applypilot edits=17 turns=1 reason=edits-threshold spawn=ok
+2026-04-26 17:30:00 | COMPLETED            | project=applypilot | 4 articles updated | Stripe full webhook handlers (cancel/fail/idempotency), stripe_processed_events table, PDF auth-fetch download fix, ProWelcomeModal docs
+2026-04-26 17:34:29 | SNAPSHOT             | project=applypilot edits=11/4 turns=1/8 elapsed=4.2/5min
+2026-04-26 17:34:29 | TRIGGERED            | project=applypilot edits=11 turns=1 reason=edits-threshold spawn=ok
+2026-04-26 17:34:00 | COMPLETED            | project=applypilot | 3 articles updated | billing portal endpoint + BillingTab component + createBillingPortalSession documented
+2026-04-26 17:49:16 | SNAPSHOT             | project=applypilot edits=12/4 turns=1/8 elapsed=14.8/5min
+2026-04-26 17:49:16 | TRIGGERED            | project=applypilot edits=12 turns=1 reason=edits-threshold spawn=ok
+2026-04-26 17:49:00 | COMPLETED            | project=applypilot | 3 articles updated | billing-portal backfill + PDF fallback removed + Playwright now enabled in dev compose
+2026-04-26 18:26:31 | SNAPSHOT             | project=applypilot edits=8/4 turns=1/8 elapsed=37.3/5min
+2026-04-26 18:26:31 | TRIGGERED            | project=applypilot edits=8 turns=1 reason=edits-threshold spawn=ok
+2026-04-26 18:26:00 | COMPLETED            | project=applypilot | 1 article updated | docker/dev.md: Playwright container-vs-image gotcha documented (exec install vanishes on container recreate; must rebuild image)

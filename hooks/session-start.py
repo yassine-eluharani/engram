@@ -25,9 +25,22 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Recursion guard — when a mid-session/session-end compile spawns a child `claude -p`,
+# its SessionStart hook would otherwise clobber session-state.json with the wrong
+# session_id/cwd, wiping the parent session's edit/turn counters.
+if os.environ.get("CLAUDE_INVOKED_BY"):
+    sys.exit(0)
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from shared import clear_running_summary, reset_state_for_session
+from shared import (
+    LOCK_FILE,
+    LOCK_STALE_SECONDS,
+    clear_running_summary,
+    log_auto_update,
+    release_lock,
+    reset_state_for_session,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 KNOWLEDGE_DIR = ROOT / "knowledge"
@@ -303,6 +316,21 @@ def main():
     if session_id or transcript_path:
         reset_state_for_session(session_id, transcript_path, cwd)
         clear_running_summary()
+
+    # Best-effort: clear a stale lock left behind by a crashed background compile
+    try:
+        import json as _json
+        import time as _time
+        if LOCK_FILE.exists():
+            data = _json.loads(LOCK_FILE.read_text(encoding="utf-8"))
+            age = _time.time() - data.get("ts", 0)
+            if age >= LOCK_STALE_SECONDS:
+                release_lock()
+                log_auto_update("STALE-LOCK-CLEARED", f"age={age:.0f}s pid={data.get('pid')}")
+    except Exception:
+        pass
+
+    log_auto_update("SESSION-START", f"project={Path(cwd).name or 'unknown'} session={session_id[:8] if session_id else '?'}")
 
     context = build_context(cwd)
 
