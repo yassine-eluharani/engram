@@ -42,6 +42,7 @@ from shared import (
     log_auto_update,
     release_lock,
     reset_state_for_session,
+    spawn_detached,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -316,11 +317,10 @@ def maybe_spawn_lint() -> None:
     if reports and time.time() - reports[-1].stat().st_mtime < LINT_INTERVAL_DAYS * 86400:
         return
     try:
-        subprocess.Popen(
+        spawn_detached(
             [sys.executable, str(ROOT / "scripts" / "lint.py"), "--structural-only"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
         )
         log_auto_update("LINT-SPAWNED", "weekly structural lint")
     except Exception:

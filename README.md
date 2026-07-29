@@ -6,6 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20|%20Linux%20|%20Windows-lightgrey.svg)](#-quick-start)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-d97757.svg)](https://claude.ai/code)
 [![Obsidian Compatible](https://img.shields.io/badge/Obsidian-compatible-7c3aed.svg)](https://obsidian.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#-contributing)
@@ -71,7 +72,9 @@ Claude: reads projects/my-app/auth-patterns.md → answers with the decision,
 ```bash
 git clone https://github.com/yassine-eluharani/engram.git
 cd engram
-./install.sh
+
+./install.sh         # macOS / Linux
+python install.py    # Windows (PowerShell) — works on all platforms
 ```
 
 Restart Claude Code. That's it — the next session in any project starts building memory.
@@ -269,7 +272,8 @@ engram/
 ├── daily/                   # Raw session logs — auto-populated by hooks
 ├── AGENTS.md                # KB schema and article format reference
 ├── CLAUDE.md                # Instructions for Claude
-└── install.sh               # One-command installer
+├── install.sh               # One-command installer (macOS/Linux)
+└── install.py               # Cross-platform installer (Windows-friendly)
 ```
 
 Robustness details, for the curious: per-session state files (concurrent sessions can't clobber each other), a 3-minute compile lock (concurrent compiles serialize), a rolling watermark (nothing is compiled twice), recursion guards (background compiles can't trigger themselves), and background compiles scoped to read/write tools only — no shell access.
@@ -316,7 +320,7 @@ Engram draws on [Andrej Karpathy's LLM Knowledge Base](https://gist.github.com/k
 
 Contributions welcome! Directions worth exploring:
 
-- 🪟 **Windows support** — hooks and path handling
+- 🪟 **Windows field reports** — native support is implemented (`install.py`, detached spawns, CLI resolution) but needs real-world testing
 - 🔀 **Project aliases** — map multiple directories to one project
 - 🔍 **KB search CLI** — query the KB from the terminal
 - 🔌 **Obsidian plugin** — surface KB gaps, trigger updates from the vault

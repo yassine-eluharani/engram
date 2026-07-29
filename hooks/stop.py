@@ -34,6 +34,7 @@ from shared import (
     SCRIPTS_DIR,
     acquire_lock,
     detect_project,
+    find_claude,
     load_state,
     log_auto_update,
     minutes_since,
@@ -41,6 +42,7 @@ from shared import (
     release_lock,
     reset_compile_counters,
     save_state,
+    spawn_detached,
     summary_file,
 )
 
@@ -174,13 +176,12 @@ def spawn_compilation(state: dict, current_turn: int) -> bool:
         with open(stdout_log, "a") as fo, open(stderr_log, "a") as fe:
             fo.write(sep)
             fe.write(sep)
-        subprocess.Popen(
-            ["claude", "--allowedTools", COMPILE_ALLOWED_TOOLS, "--model", COMPILE_MODEL, "-p", prompt],
+        spawn_detached(
+            [find_claude(), "--allowedTools", COMPILE_ALLOWED_TOOLS, "--model", COMPILE_MODEL, "-p", prompt],
             env=env,
             cwd=str(ROOT),
             stdout=open(stdout_log, "a"),
             stderr=open(stderr_log, "a"),
-            start_new_session=True,
         )
         logging.info(
             "Spawned mid-session compile: project=%s turns=%d→%d", project, start_turn, current_turn

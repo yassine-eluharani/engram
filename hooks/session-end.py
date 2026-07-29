@@ -33,9 +33,11 @@ from shared import (
     ROOT,
     SCRIPTS_DIR,
     detect_project,
+    find_claude,
     load_state,
     log_auto_update,
     read_running_summary,
+    spawn_detached,
     summary_file,
 )
 
@@ -257,13 +259,12 @@ def spawn_kb_compilation(
         with open(stdout_log, "a") as f_out, open(stderr_log, "a") as f_err:
             f_out.write(separator)
             f_err.write(separator)
-        subprocess.Popen(
-            ["claude", "--allowedTools", COMPILE_ALLOWED_TOOLS, "--model", COMPILE_MODEL, "-p", prompt],
+        spawn_detached(
+            [find_claude(), "--allowedTools", COMPILE_ALLOWED_TOOLS, "--model", COMPILE_MODEL, "-p", prompt],
             env=env,
             cwd=str(ROOT),
             stdout=open(stdout_log, "a"),
             stderr=open(stderr_log, "a"),
-            start_new_session=True,
         )
         logging.info(
             "Spawned background KB compilation: project=%s start_turn=%d", project, start_turn

@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "hooks"))
 
-from shared import COMPILE_MODEL  # noqa: E402
+from shared import COMPILE_MODEL, find_claude  # noqa: E402
 
 KNOWLEDGE_DIR = ROOT / "knowledge"
 
@@ -55,7 +55,7 @@ def main() -> int:
 
     return subprocess.run(
         [
-            "claude",
+            find_claude(),
             "--allowedTools", "Read,Glob,Grep,Write,Edit,Bash(rm:*)",
             "--model", COMPILE_MODEL,
             "-p", prompt,

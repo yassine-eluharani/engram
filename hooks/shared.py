@@ -14,10 +14,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+IS_WINDOWS = os.name == "nt"
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT / "scripts"
@@ -35,6 +38,28 @@ COMPILE_ALLOWED_TOOLS = "Read,Glob,Grep,Write,Edit"
 
 # Per-session files older than this get cleaned up at session start
 SESSION_FILE_MAX_AGE_DAYS = 7
+
+
+# ── Cross-platform process spawning ──────────────────────────────────────────
+
+def find_claude() -> str:
+    """Resolve the claude CLI. On Windows it's claude.cmd/claude.exe, which a
+    bare Popen(["claude", ...]) can't find — which() returns the full path."""
+    return shutil.which("claude") or "claude"
+
+
+def spawn_detached(cmd: list[str], *, env=None, cwd=None, stdout=None, stderr=None) -> None:
+    """Fire-and-forget a background process that survives the hook's exit.
+    POSIX detaches via setsid; Windows needs creationflags instead."""
+    kwargs: dict = {}
+    if IS_WINDOWS:
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        )
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(cmd, env=env, cwd=cwd, stdout=stdout, stderr=stderr, **kwargs)
 
 
 # ── Project detection ─────────────────────────────────────────────────────────
