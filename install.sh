@@ -79,6 +79,11 @@ cp "$SCRIPT_DIR/scripts/garden.py"       "$INSTALL_DIR/scripts/"
 cp "$SCRIPT_DIR/AGENTS.md"               "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/pyproject.toml"          "$INSTALL_DIR/"
 
+# /garden slash command (available in every Claude Code session)
+mkdir -p "$HOME/.claude/commands"
+sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" "$SCRIPT_DIR/commands/garden.md" \
+  > "$HOME/.claude/commands/garden.md"
+
 # Initialize empty KB files if they don't exist yet
 [ -f "$INSTALL_DIR/knowledge/index.md" ] || cat > "$INSTALL_DIR/knowledge/index.md" << 'EOF'
 # Knowledge Base Index
