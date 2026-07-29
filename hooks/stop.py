@@ -28,9 +28,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from shared import (
     AUTO_LOG_FILE,
+    COMPILE_ALLOWED_TOOLS,
+    COMPILE_MODEL,
     ROOT,
     SCRIPTS_DIR,
     acquire_lock,
+    detect_project,
     load_state,
     log_auto_update,
     minutes_since,
@@ -38,10 +41,10 @@ from shared import (
     release_lock,
     reset_compile_counters,
     save_state,
+    summary_file,
 )
 
 KNOWLEDGE_DIR = ROOT / "knowledge"
-SUMMARY_FILE = SCRIPTS_DIR / "last-compile-summary.txt"
 
 EDITS_THRESHOLD = 4
 TURNS_THRESHOLD = 8
@@ -100,8 +103,10 @@ def spawn_compilation(state: dict, current_turn: int) -> bool:
     """Spawn a background Claude process to compile the current window. Returns True if spawned."""
     transcript_path_str = state.get("transcript_path", "")
     cwd = state.get("cwd", "")
+    session_id = state.get("session_id", "")
     start_turn = state.get("last_compile_turn", 0)
-    running_summary = read_running_summary()
+    running_summary = read_running_summary(session_id)
+    session_summary_file = summary_file(session_id)
 
     if not transcript_path_str:
         logging.info("SKIP: no transcript_path in session state")
@@ -119,7 +124,7 @@ def spawn_compilation(state: dict, current_turn: int) -> bool:
     today = datetime.now(timezone.utc).astimezone()
     today_str = today.strftime("%Y-%m-%d")
     time_str = today.strftime("%H:%M")
-    project = Path(cwd).name if cwd else "unknown"
+    project = detect_project(cwd)
 
     prior = (
         f"\n## Context from previous compilations this session\n\n{running_summary}\n\n"
@@ -130,7 +135,7 @@ def spawn_compilation(state: dict, current_turn: int) -> bool:
         f"Automated mid-session KB compilation — do not ask questions, just do the work.\n\n"
         f"Project: `{project}` | Date: {today_str} {time_str}\n"
         f"KB root: {KNOWLEDGE_DIR}/\n"
-        f"Summary output path: {SUMMARY_FILE}\n"
+        f"Summary output path: {session_summary_file}\n"
         f"{prior}"
         f"## Conversation turns (window {start_turn}→{current_turn})\n\n"
         f"{turns_text}\n\n"
@@ -149,7 +154,7 @@ def spawn_compilation(state: dict, current_turn: int) -> bool:
         f"  `| [[projects/{project}/<topic>/_index]] | leaf1, leaf2, leaf3 | {project} | {today_str} |`\n"
         f"Flat articles remain as individual rows.\n\n"
         f"### After completing KB updates\n"
-        f"1. Write a 2-3 sentence summary to {SUMMARY_FILE} (what was compiled — used by next window)\n"
+        f"1. Write a 2-3 sentence summary to {session_summary_file} (what was compiled — used by next window)\n"
         f"2. Append one line to {KNOWLEDGE_DIR}/log.md:\n"
         f"   `## {today_str}T{time_str} mid-session | {project} — N articles updated`\n"
         f"3. Append ONE line to {AUTO_LOG_FILE} using the current local time in `YYYY-MM-DD HH:MM:SS` format:\n"
@@ -170,7 +175,7 @@ def spawn_compilation(state: dict, current_turn: int) -> bool:
             fo.write(sep)
             fe.write(sep)
         subprocess.Popen(
-            ["claude", "--dangerously-skip-permissions", "--model", "claude-sonnet-4-6", "-p", prompt],
+            ["claude", "--allowedTools", COMPILE_ALLOWED_TOOLS, "--model", COMPILE_MODEL, "-p", prompt],
             env=env,
             cwd=str(ROOT),
             stdout=open(stdout_log, "a"),
@@ -200,7 +205,8 @@ def main() -> None:
     if payload.get("stop_hook_active"):
         sys.exit(0)
 
-    state = load_state()
+    session_id = payload.get("session_id", "")
+    state = load_state(session_id)
     state["turns_since_compile"] = state.get("turns_since_compile", 0) + 1
     save_state(state)
 
@@ -208,7 +214,7 @@ def main() -> None:
     turns = state["turns_since_compile"]
     elapsed = minutes_since(state.get("last_compile_time", ""))
     current_turn = state.get("last_compile_turn", 0) + turns
-    project = Path(state.get("cwd", "")).name or "unknown"
+    project = detect_project(state.get("cwd", ""))
 
     edits_trigger = edits >= EDITS_THRESHOLD
     turns_trigger = turns >= TURNS_THRESHOLD and elapsed >= TIME_THRESHOLD_MINUTES
@@ -244,7 +250,7 @@ def main() -> None:
             "TRIGGERED",
             f"project={project} edits={edits} turns={turns} reason={reason} spawn=ok",
         )
-        state = load_state()
+        state = load_state(session_id)
         state = reset_compile_counters(state, current_turn)
         save_state(state)
         # Lock intentionally NOT released — expires after LOCK_STALE_SECONDS to prevent rapid re-triggering

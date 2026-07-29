@@ -71,7 +71,7 @@ Engram is not just for code. It works for anything:
 
 Engram is designed to minimize token usage at session start:
 
-- **Global index** — always injected (just a table of titles + summaries, lightweight)
+- **Global index** — current project's rows in full; other projects collapsed to name + article count
 - **Project article listing** — titles and first line only, not full content
 - **2 most recently modified articles** — full content ("hot context")
 - **Recent daily log tail** — last 20 lines
@@ -86,11 +86,15 @@ Total: ~3–5k tokens per session, regardless of how large the KB grows. Claude 
 engram/
 ├── hooks/
 │   ├── session-start.py     # Injects project-aware KB context at session start
-│   └── session-end.py       # Saves conversation turns to daily log (no API)
+│   ├── session-end.py       # Compiles remaining turns into the KB + daily log
+│   ├── stop.py              # Mid-session compile trigger (edit/turn thresholds)
+│   ├── post-tool-use.py     # Edit counter for the mid-session trigger
+│   └── shared.py            # Session state, compile lock, project detection
 ├── scripts/
 │   ├── config.py            # Path constants
 │   ├── utils.py             # Shared helpers
-│   └── lint.py              # KB health checks (structural, no LLM needed)
+│   ├── lint.py              # KB health checks (structural checks are free)
+│   └── garden.py            # Manual per-project KB compaction pass
 ├── knowledge/               # The wiki — point Obsidian here as a vault
 │   ├── index.md             # Master catalog — every article with one-line summary
 │   ├── log.md               # Append-only operation log
@@ -138,12 +142,17 @@ During session
     • Patterns or conventions are established
     • Non-obvious bugs are solved
     • User asks to "save / remember / update the KB"
+
+  Stop + PostToolUse hooks track activity; when ≥4 edits, or ≥8 turns
+  and 5+ minutes have passed, a background headless `claude -p` compiles
+  the new turns into the KB (rolling watermark prevents re-processing)
        │
        ▼
 Session ends
   SessionEnd hook fires
-    • Extracts last 30 conversation turns from transcript
-    • Appends to daily/YYYY-MM-DD.md (no API call)
+    • Extracts the turns not yet compiled mid-session
+    • Spawns a background `claude -p` that appends a session summary
+      to daily/YYYY-MM-DD.md and updates the KB
 ```
 
 ### Knowledge base structure
@@ -193,7 +202,7 @@ Wikilinks use Obsidian format: `[[projects/my-saas-app/auth-patterns]]` (no `.md
 | Python | 3.12+ | Managed by uv |
 | Obsidian | Any | Optional, for browsing the KB |
 
-**No ANTHROPIC_API_KEY required.** Engram uses no external API calls. Claude Code itself is the LLM — it reads and writes the wiki files directly during sessions.
+**No ANTHROPIC_API_KEY required.** Claude Code itself is the LLM: it reads and writes the wiki files directly during sessions, and the background compiles run headless `claude -p` under your existing Claude Code login, with tools scoped to read/write only (no shell access).
 
 ---
 
@@ -264,6 +273,30 @@ uv sync --directory ~/.claude/engram
             "type": "command",
             "command": "uv run --directory ~/.claude/engram python ~/.claude/engram/hooks/session-end.py",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory ~/.claude/engram python ~/.claude/engram/hooks/stop.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory ~/.claude/engram python ~/.claude/engram/hooks/post-tool-use.py",
+            "timeout": 5
           }
         ]
       }
@@ -370,6 +403,24 @@ HOT_ARTICLES = 2             # How many recent articles to load in full
 MAX_LOG_LINES = 20           # Lines of daily log to include
 ```
 
+### Adjust the mid-session compile triggers
+
+Edit `hooks/stop.py`:
+
+```python
+EDITS_THRESHOLD = 4          # Compile after this many file edits
+TURNS_THRESHOLD = 8          # ... or this many turns
+TIME_THRESHOLD_MINUTES = 5   #     combined with this much elapsed time
+```
+
+### Change the compile model
+
+Background compiles default to Sonnet. Override with an env var:
+
+```bash
+export ENGRAM_COMPILE_MODEL=claude-haiku-4-5-20251001   # ~3x cheaper compiles
+```
+
 ### Change the project detection logic
 
 By default, Engram detects projects from:
@@ -390,7 +441,7 @@ By default, the KB lives at `~/.claude/engram/knowledge/`. To move it, update `R
 
 ## KB health checks
 
-Engram includes a structural linter that runs 6 checks with no API needed:
+Engram includes a structural linter that runs 6 checks with no API needed. It runs automatically in the background once a week (triggered by session start); run it manually with:
 
 ```bash
 uv run --directory ~/.claude/engram python scripts/lint.py --structural-only
@@ -405,7 +456,15 @@ uv run --directory ~/.claude/engram python scripts/lint.py --structural-only
 | Missing backlinks | A links to B but B doesn't link back |
 | Sparse articles | Articles under 200 words |
 
-Reports are saved to `reports/lint-YYYY-MM-DD.md`.
+Reports are saved to `reports/lint-YYYY-MM-DD.md`, with a one-line summary appended to `auto-updates.log`.
+
+### KB gardening
+
+Background compiles only ever add to the KB. Occasionally compact a project — merge duplicate bullets, drop resolved/contradicted claims, enforce granularity:
+
+```bash
+uv run --directory ~/.claude/engram python scripts/garden.py <project-slug>
+```
 
 ---
 

@@ -1,23 +1,27 @@
 """
 Shared helpers for Engram hooks.
 
-- session-state.json: tracks activity within the current session
+- session-state-<id>.json: tracks activity within one session (keyed by session_id
+  so concurrent sessions don't clobber each other)
 - compile.lock: prevents concurrent background compilations
+- detect_project/slugify: single source of truth for project slugs — the
+  SessionStart injector and the background compilers must agree, or the KB
+  splits into parallel folders (Malath vs malath) on case-sensitive filesystems
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT / "scripts"
-STATE_FILE = SCRIPTS_DIR / "session-state.json"
 LOCK_FILE = SCRIPTS_DIR / "compile.lock"
-SUMMARY_FILE = SCRIPTS_DIR / "last-compile-summary.txt"
 
 # How old a lockfile must be (seconds) before we consider the process dead
 LOCK_STALE_SECONDS = 180  # 3 minutes
@@ -25,8 +29,46 @@ LOCK_STALE_SECONDS = 180  # 3 minutes
 # Single, append-only feed of automatic-update activity. Easy to tail.
 AUTO_LOG_FILE = ROOT / "auto-updates.log"
 
+# Background compiler settings — one place, used by stop.py, session-end.py, garden.py
+COMPILE_MODEL = os.environ.get("ENGRAM_COMPILE_MODEL", "claude-sonnet-4-6")
+COMPILE_ALLOWED_TOOLS = "Read,Glob,Grep,Write,Edit"
 
-# ── Session state ─────────────────────────────────────────────────────────────
+# Per-session files older than this get cleaned up at session start
+SESSION_FILE_MAX_AGE_DAYS = 7
+
+
+# ── Project detection ─────────────────────────────────────────────────────────
+
+def slugify(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_]+", "-", text)
+    return re.sub(r"-+", "-", text).strip("-") or "global"
+
+
+def detect_project(cwd: str) -> str:
+    """Detect project slug from git remote name, falling back to folder name."""
+    if not cwd:
+        return "global"
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=3
+        )
+        if result.returncode == 0:
+            remote = result.stdout.strip()
+            match = re.search(r"/([^/]+?)(?:\.git)?$", remote)
+            if match:
+                return slugify(match.group(1))
+    except Exception:
+        pass
+
+    name = Path(cwd).name
+    return slugify(name) if name and name not in ("", ".", "/") else "global"
+
+
+# ── Session state (keyed by session_id) ───────────────────────────────────────
 
 DEFAULT_STATE: dict = {
     "session_id": "",
@@ -40,22 +82,40 @@ DEFAULT_STATE: dict = {
 }
 
 
-def load_state() -> dict:
+def _session_suffix(session_id: str) -> str:
+    return re.sub(r"[^\w-]", "", session_id)[:8]
+
+
+def state_file(session_id: str) -> Path:
+    sid = _session_suffix(session_id)
+    name = f"session-state-{sid}.json" if sid else "session-state.json"
+    return SCRIPTS_DIR / name
+
+
+def summary_file(session_id: str) -> Path:
+    sid = _session_suffix(session_id)
+    name = f"last-compile-summary-{sid}.txt" if sid else "last-compile-summary.txt"
+    return SCRIPTS_DIR / name
+
+
+def load_state(session_id: str = "") -> dict:
     """Load session state from disk, returning defaults if missing/corrupt."""
     try:
-        if STATE_FILE.exists():
-            return {**DEFAULT_STATE, **json.loads(STATE_FILE.read_text(encoding="utf-8"))}
+        f = state_file(session_id)
+        if f.exists():
+            return {**DEFAULT_STATE, **json.loads(f.read_text(encoding="utf-8"))}
     except Exception:
         pass
     return dict(DEFAULT_STATE)
 
 
 def save_state(state: dict) -> None:
-    """Atomically write session state to disk."""
+    """Atomically write session state to disk, keyed by state['session_id']."""
     SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
+    f = state_file(state.get("session_id", ""))
+    tmp = f.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    tmp.replace(f)
 
 
 def reset_state_for_session(session_id: str, transcript_path: str, cwd: str) -> dict:
@@ -76,6 +136,18 @@ def reset_compile_counters(state: dict, current_turn: int) -> dict:
     state["edits_since_compile"] = 0
     state["turns_since_compile"] = 0
     return state
+
+
+def cleanup_old_session_files() -> None:
+    """Delete per-session state/summary files older than SESSION_FILE_MAX_AGE_DAYS."""
+    cutoff = time.time() - SESSION_FILE_MAX_AGE_DAYS * 86400
+    for pattern in ("session-state-*.json", "last-compile-summary-*.txt"):
+        for f in SCRIPTS_DIR.glob(pattern):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except Exception:
+                pass
 
 
 # ── Lockfile ──────────────────────────────────────────────────────────────────
@@ -133,19 +205,20 @@ def _write_lock(ts: float) -> None:
 
 # ── Running summary ───────────────────────────────────────────────────────────
 
-def read_running_summary() -> str:
+def read_running_summary(session_id: str = "") -> str:
     """Return the summary written by the last mid-session compilation, or ''."""
     try:
-        if SUMMARY_FILE.exists():
-            return SUMMARY_FILE.read_text(encoding="utf-8").strip()
+        f = summary_file(session_id)
+        if f.exists():
+            return f.read_text(encoding="utf-8").strip()
     except Exception:
         pass
     return ""
 
 
-def clear_running_summary() -> None:
+def clear_running_summary(session_id: str = "") -> None:
     try:
-        SUMMARY_FILE.unlink(missing_ok=True)
+        summary_file(session_id).unlink(missing_ok=True)
     except Exception:
         pass
 

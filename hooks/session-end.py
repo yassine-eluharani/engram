@@ -28,12 +28,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from shared import (
     AUTO_LOG_FILE,
+    COMPILE_ALLOWED_TOOLS,
+    COMPILE_MODEL,
     ROOT,
     SCRIPTS_DIR,
-    SUMMARY_FILE,
+    detect_project,
     load_state,
     log_auto_update,
     read_running_summary,
+    summary_file,
 )
 
 DAILY_DIR = ROOT / "daily"
@@ -125,10 +128,10 @@ def main() -> None:
         logging.error("Failed to parse stdin: %s", e)
         return
 
-    session_id = hook_input.get("session_id", "unknown")
+    session_id = hook_input.get("session_id", "")
     cwd = hook_input.get("cwd", "") or hook_input.get("working_directory", "")
     transcript_path_str = hook_input.get("transcript_path", "")
-    project = Path(cwd).name if cwd else "?"
+    project = detect_project(cwd)
 
     logging.info("SessionEnd: session=%s project=%s", session_id, project)
 
@@ -144,9 +147,9 @@ def main() -> None:
         return
 
     # Read watermark from session state — skip turns already compiled mid-session
-    state = load_state()
+    state = load_state(session_id)
     start_turn = state.get("last_compile_turn", 0)
-    running_summary = read_running_summary()
+    running_summary = read_running_summary(session_id)
 
     logging.info("Watermark: start_turn=%d", start_turn)
 
@@ -170,7 +173,7 @@ def main() -> None:
         "SESSION-END-TRIGGERED",
         f"project={project} turns={turn_count} start_turn={start_turn}",
     )
-    spawn_kb_compilation(cwd, turns_text, start_turn, running_summary)
+    spawn_kb_compilation(cwd, turns_text, start_turn, running_summary, session_id)
 
 
 def spawn_kb_compilation(
@@ -178,12 +181,14 @@ def spawn_kb_compilation(
     turns_text: str,
     start_turn: int,
     running_summary: str,
+    session_id: str,
 ) -> None:
     """Spawn a background headless Claude session to update the KB from remaining turns."""
     today = datetime.now(timezone.utc).astimezone()
     today_str = today.strftime("%Y-%m-%d")
     time_str = today.strftime("%H:%M")
-    project = Path(cwd).name if cwd else "unknown"
+    project = detect_project(cwd)
+    session_summary_file = summary_file(session_id)
     daily_log_path = ensure_daily_log(today_str)
 
     prior = (
@@ -198,7 +203,7 @@ def spawn_kb_compilation(
         f"Project: `{project}` | Date: {today_str} {time_str}\n"
         f"Daily log path: {daily_log_path}\n"
         f"KB root: {KNOWLEDGE_DIR}/\n"
-        f"Summary output path: {SUMMARY_FILE}\n"
+        f"Summary output path: {session_summary_file}\n"
         f"{prior}"
         f"## Raw conversation turns ({window_label})\n\n"
         f"{turns_text}\n\n"
@@ -253,7 +258,7 @@ def spawn_kb_compilation(
             f_out.write(separator)
             f_err.write(separator)
         subprocess.Popen(
-            ["claude", "--dangerously-skip-permissions", "--model", "claude-sonnet-4-6", "-p", prompt],
+            ["claude", "--allowedTools", COMPILE_ALLOWED_TOOLS, "--model", COMPILE_MODEL, "-p", prompt],
             env=env,
             cwd=str(ROOT),
             stdout=open(stdout_log, "a"),

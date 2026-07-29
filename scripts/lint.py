@@ -286,6 +286,18 @@ def main():
     suggestions = sum(1 for i in all_issues if i["severity"] == "suggestion")
     print(f"\nResults: {errors} errors, {warnings} warnings, {suggestions} suggestions")
 
+    # One-line summary into the shared auto-update feed
+    try:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(ROOT_DIR / "auto-updates.log", "a", encoding="utf-8") as f:
+            f.write(
+                f"{ts} | {'LINT':<20} | {errors} errors, {warnings} warnings, "
+                f"{suggestions} suggestions | report={report_path.name}\n"
+            )
+    except Exception:
+        pass
+
     if errors > 0:
         print("\nErrors found - knowledge base needs attention!")
         return 1

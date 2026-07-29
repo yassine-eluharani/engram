@@ -69,9 +69,13 @@ mkdir -p \
 
 cp "$SCRIPT_DIR/hooks/session-start.py"  "$INSTALL_DIR/hooks/"
 cp "$SCRIPT_DIR/hooks/session-end.py"    "$INSTALL_DIR/hooks/"
+cp "$SCRIPT_DIR/hooks/stop.py"           "$INSTALL_DIR/hooks/"
+cp "$SCRIPT_DIR/hooks/post-tool-use.py"  "$INSTALL_DIR/hooks/"
+cp "$SCRIPT_DIR/hooks/shared.py"         "$INSTALL_DIR/hooks/"
 cp "$SCRIPT_DIR/scripts/config.py"       "$INSTALL_DIR/scripts/"
 cp "$SCRIPT_DIR/scripts/utils.py"        "$INSTALL_DIR/scripts/"
 cp "$SCRIPT_DIR/scripts/lint.py"         "$INSTALL_DIR/scripts/"
+cp "$SCRIPT_DIR/scripts/garden.py"       "$INSTALL_DIR/scripts/"
 cp "$SCRIPT_DIR/AGENTS.md"               "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/pyproject.toml"          "$INSTALL_DIR/"
 
@@ -107,9 +111,10 @@ echo "  Updating Claude Code settings..."
 
 HOOK_START="uv run --directory $INSTALL_DIR python $INSTALL_DIR/hooks/session-start.py"
 HOOK_END="uv run --directory $INSTALL_DIR python $INSTALL_DIR/hooks/session-end.py"
+HOOK_STOP="uv run --directory $INSTALL_DIR python $INSTALL_DIR/hooks/stop.py"
+HOOK_POST="uv run --directory $INSTALL_DIR python $INSTALL_DIR/hooks/post-tool-use.py"
 
-if [ ! -f "$CLAUDE_SETTINGS" ]; then
-  cat > "$CLAUDE_SETTINGS" << EOF
+HOOKS_JSON=$(cat << EOF
 {
   "hooks": {
     "SessionStart": [
@@ -123,10 +128,26 @@ if [ ! -f "$CLAUDE_SETTINGS" ]; then
         "matcher": "",
         "hooks": [{"type": "command", "command": "$HOOK_END", "timeout": 10}]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "$HOOK_STOP", "timeout": 10}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [{"type": "command", "command": "$HOOK_POST", "timeout": 5}]
+      }
     ]
   }
 }
 EOF
+)
+
+if [ ! -f "$CLAUDE_SETTINGS" ]; then
+  echo "$HOOKS_JSON" > "$CLAUDE_SETTINGS"
   echo "  ✓ Created $CLAUDE_SETTINGS"
 else
   # settings.json exists — check if hooks are already present
@@ -135,28 +156,10 @@ else
     echo "    Edit $CLAUDE_SETTINGS manually if you need to update the paths."
   else
     echo ""
-    echo "  ┌─────────────────────────────────────────────────────────────┐"
-    echo "  │ ACTION REQUIRED: Add hooks to ~/.claude/settings.json       │"
-    echo "  │                                                             │"
-    echo "  │ Add these entries inside the \"hooks\" object:               │"
-    echo "  │                                                             │"
-    echo "  │   \"SessionStart\": [{                                       │"
-    echo "  │     \"matcher\": \"\",                                        │"
-    echo "  │     \"hooks\": [{                                            │"
-    echo "  │       \"type\": \"command\",                                  │"
-    echo "  │       \"timeout\": 15,                                       │"
-    echo "  │       \"command\": \"$HOOK_START\"                            │"
-    echo "  │     }]                                                      │"
-    echo "  │   }],                                                       │"
-    echo "  │   \"SessionEnd\": [{                                         │"
-    echo "  │     \"matcher\": \"\",                                        │"
-    echo "  │     \"hooks\": [{                                            │"
-    echo "  │       \"type\": \"command\",                                  │"
-    echo "  │       \"timeout\": 10,                                       │"
-    echo "  │       \"command\": \"$HOOK_END\"                              │"
-    echo "  │     }]                                                      │"
-    echo "  │   }]                                                        │"
-    echo "  └─────────────────────────────────────────────────────────────┘"
+    echo "  ACTION REQUIRED: merge these entries into the \"hooks\" object"
+    echo "  of $CLAUDE_SETTINGS:"
+    echo ""
+    echo "$HOOKS_JSON"
   fi
 fi
 

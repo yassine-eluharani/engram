@@ -29,7 +29,7 @@ def main() -> None:
     if tool_name not in EDIT_TOOLS:
         return
 
-    state = load_state()
+    state = load_state(payload.get("session_id", ""))
     state["edits_since_compile"] = state.get("edits_since_compile", 0) + 1
     save_state(state)
 

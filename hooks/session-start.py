@@ -36,7 +36,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shared import (
     LOCK_FILE,
     LOCK_STALE_SECONDS,
+    cleanup_old_session_files,
     clear_running_summary,
+    detect_project,
     log_auto_update,
     release_lock,
     reset_state_for_session,
@@ -52,35 +54,6 @@ INDEX_FILE = KNOWLEDGE_DIR / "index.md"
 MAX_CONTEXT_CHARS = 18_000
 HOT_ARTICLES = 2
 MAX_LOG_LINES = 20
-
-
-def detect_project(cwd: str) -> str:
-    """Detect project slug from git remote name, falling back to folder name."""
-    if not cwd:
-        return "global"
-
-    try:
-        result = subprocess.run(
-            ["git", "-C", cwd, "remote", "get-url", "origin"],
-            capture_output=True, text=True, timeout=3
-        )
-        if result.returncode == 0:
-            remote = result.stdout.strip()
-            match = re.search(r"/([^/]+?)(?:\.git)?$", remote)
-            if match:
-                return slugify(match.group(1))
-    except Exception:
-        pass
-
-    name = Path(cwd).name
-    return slugify(name) if name and name not in ("", ".", "/") else "global"
-
-
-def slugify(text: str) -> str:
-    text = text.lower().strip()
-    text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[\s_]+", "-", text)
-    return re.sub(r"-+", "-", text).strip("-") or "global"
 
 
 def get_first_content_line(path: Path) -> str:
@@ -215,6 +188,52 @@ def get_hot_articles(
     return hot_parts, budget
 
 
+def build_index_section(slug: str) -> str:
+    """
+    Inject the current project's index rows in full; collapse every other
+    project to a name + article count. The full index.md grew past 15KB —
+    injecting it whole was starving the hot-article budget.
+    """
+    empty = (
+        "## Global Knowledge Index\n\n"
+        "| Article | Summary | Project | Updated |\n"
+        "|---------|---------|---------|---------|"
+    )
+    if not INDEX_FILE.exists():
+        return empty
+
+    current_rows: list[str] = []
+    others: dict[str, int] = {}
+
+    for line in INDEX_FILE.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 4 or not cells[0].startswith("[["):
+            continue  # header / separator rows
+        project = cells[2]
+        if project == slug:
+            current_rows.append(stripped)
+        else:
+            others[project] = others.get(project, 0) + 1
+
+    parts = [
+        "## Global Knowledge Index",
+        "",
+        f"Rows for `{slug}` shown in full; other projects collapsed to counts.",
+        "Full catalog: `~/.claude/memory-compiler/knowledge/index.md` (Read on demand).",
+        "",
+        "| Article | Summary | Project | Updated |",
+        "|---------|---------|---------|---------|",
+        *current_rows,
+    ]
+    if others:
+        collapsed = ", ".join(f"`{p}` ({n})" for p, n in sorted(others.items()))
+        parts += ["", f"**Other projects:** {collapsed}"]
+    return "\n".join(parts)
+
+
 def get_recent_log() -> str:
     today = datetime.now(timezone.utc).astimezone()
     for offset in range(2):
@@ -243,16 +262,8 @@ def build_context(cwd: str) -> str:
     parts.append(header)
     budget -= len(header)
 
-    # ── 2. Global index ────────────────────────────────────────────────────
-    if INDEX_FILE.exists():
-        index_text = INDEX_FILE.read_text(encoding="utf-8")
-        entry = f"## Global Knowledge Index\n\n{index_text}"
-    else:
-        entry = (
-            "## Global Knowledge Index\n\n"
-            "| Article | Summary | Project | Updated |\n"
-            "|---------|---------|---------|---------|"
-        )
+    # ── 2. Global index (current project full, others collapsed) ──────────
+    entry = build_index_section(slug)
 
     if len(entry) <= budget:
         parts.append(entry)
@@ -294,6 +305,28 @@ def build_context(cwd: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+LINT_INTERVAL_DAYS = 7
+
+
+def maybe_spawn_lint() -> None:
+    """Spawn a free structural lint in the background if none ran in the last week."""
+    import time
+
+    reports = sorted((ROOT / "reports").glob("lint-*.md"), key=lambda p: p.stat().st_mtime)
+    if reports and time.time() - reports[-1].stat().st_mtime < LINT_INTERVAL_DAYS * 86400:
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, str(ROOT / "scripts" / "lint.py"), "--structural-only"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        log_auto_update("LINT-SPAWNED", "weekly structural lint")
+    except Exception:
+        pass
+
+
 def main():
     cwd = ""
     session_id = ""
@@ -315,7 +348,8 @@ def main():
     # Initialise session state for the Stop hook's mid-session trigger
     if session_id or transcript_path:
         reset_state_for_session(session_id, transcript_path, cwd)
-        clear_running_summary()
+        clear_running_summary(session_id)
+    cleanup_old_session_files()
 
     # Best-effort: clear a stale lock left behind by a crashed background compile
     try:
@@ -330,7 +364,9 @@ def main():
     except Exception:
         pass
 
-    log_auto_update("SESSION-START", f"project={Path(cwd).name or 'unknown'} session={session_id[:8] if session_id else '?'}")
+    maybe_spawn_lint()
+
+    log_auto_update("SESSION-START", f"project={detect_project(cwd)} session={session_id[:8] if session_id else '?'}")
 
     context = build_context(cwd)
 

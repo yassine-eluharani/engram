@@ -16,6 +16,8 @@ reports/
 auto-updates.log
 scripts/compile.lock
 scripts/session-state.json
+scripts/session-state-*.json
+scripts/last-compile-summary-*.txt
 scripts/stop-hook.log
 scripts/last-compile-summary.txt
 scripts/kb-compile-stderr.log
