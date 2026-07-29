@@ -2,11 +2,12 @@
 Stop hook - mid-session compilation trigger.
 
 Evaluates thresholds after each Claude turn. Fires rolling-window compilation when:
-  - edits_since_compile >= 8   (meaningful chunk of file work done)
-  - turns_since_compile >= 15  AND  time_since_last_compile >= 10 min
+  - edits_since_compile >= EDITS_THRESHOLD   (meaningful chunk of file work done)
+  - turns_since_compile >= TURNS_THRESHOLD  AND  elapsed >= TIME_THRESHOLD_MINUTES
 
 Uses a lockfile to prevent concurrent compilations. After a successful spawn the
-lock is intentionally left in place (~5 min TTL) to prevent rapid re-triggering.
+lock is intentionally left in place (LOCK_STALE_SECONDS TTL) to prevent rapid
+re-triggering.
 """
 
 from __future__ import annotations

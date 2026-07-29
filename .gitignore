@@ -13,6 +13,13 @@ knowledge/log.md
 reports/
 
 # Runtime state
+auto-updates.log
+scripts/compile.lock
+scripts/session-state.json
+scripts/stop-hook.log
+scripts/last-compile-summary.txt
+scripts/kb-compile-stderr.log
+scripts/kb-compile-stdout.log
 scripts/state.json
 scripts/last-flush.json
 scripts/flush.log
